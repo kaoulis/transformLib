@@ -1,18 +1,23 @@
 import pandas as pd
 from pandas.errors import ParserError
+from Dataflow import Dataflow
+from Expression import Expression
+from linkedServices import LinkedService
+from helpers.If import If
+from helpers.Statement import Statement
 
 
 class Dataset:
 
-    def __init__(self, df: pd.DataFrame, dataset_msg: dict = None , frozen: bool = True, enable_sum_stats: bool = False) -> None:
+    def __init__(self, df: pd.DataFrame = None, dataset_msg: dict = None , frozen: bool = True, enable_sum_stats: bool = False) -> None:
         self.df = df
         if dataset_msg is None:
             self.dataset_msg = {}
         else:
-            self.dataset_msg = dataset_msg 
-        if frozen:
-            dataset_msg
-        else:
+            self.dataset_msg = dataset_msg
+        self.frozen = frozen
+        self.enable_sum_stats = enable_sum_stats
+        if not frozen:
             self.process()
 
 
@@ -25,12 +30,15 @@ class Dataset:
         # Return Shape
         self.dataset_msg["shape"] = self.getShape()
         # Return Summary Statistics
-        self.dataset_msg["sumStats"] = self.getSumStats()
+        if self.enable_sum_stats:
+            self.dataset_msg["sumStats"] = self.getSumStats()
+        else:
+            self.dataset_msg["sumStats"] = "Summary statistics are disabled."
         # Return Preview
         self.dataset_msg["preview"] = self.getPreview()
 
 
-    def transform(self, steps: list = None):
+    def transform(self, steps: list = None) -> dict:
         if steps is None:
             steps = self.dataset_msg.get("transformations", [])
         self.inferSchema()
@@ -98,5 +106,109 @@ class Dataset:
         self.df = self.df.rename(columns=columns)
 
 
-    def filter(self, action, statement):
+    def filter(self, action, statement: dict):
+        statement = Statement(**statement)
+        if action == "select":
+            self.df = self.df[statement(self.df)]
+        elif self.action == "drop":
+            self.df = self.df[~statement(self.df)]
+
+
+    def na(self, action, axis, how, subset=None):
+        if action == "drop":
+            self.df = self.df.dropna(axis=axis, how=how, subset=subset)
+
+
+    def aggregate(self, groupBy, function, of, new_column):
+        self.df[new_column] = self.df.groupby(by=groupBy)[of].transform(function)
+
+
+    def expression(self, method, kwargs, new_column):
+        exp = Expression(method, **kwargs)
+        self.df[new_column] = exp.execute(self.df)
+
+
+    def ifelse(self, elifs, els, new_column):
+        for idx, i in enumerate(elifs):
+            if isinstance(i.get("then"), dict):
+                then = Expression(i.get("then")["expression"]["method"], i.get("then")["expression"]["kwargs"]).execute()
+            else:
+                then = i.get("then")
+            elifs[idx] = If(Statement(**i.get("statement")), then)
+        if els is not None:
+            elifs[-1].setElse(els)
+        for idx, i in reversed(list(enumerate(elifs))):
+            if idx == 0:
+                self.df[new_column] = i(self.df)
+                self.df[new_column] = self.df[new_column].convert_dtypes()
+                break
+            elifs[idx - 1].setElse(i(self.df))
+
+
+    def merge(self, rightDs, how, leftOn, rightOn, columns):
         pass
+
+
+
+
+
+class Workspace:
+
+    def __init__(self, sources, dataflows) -> None:
+        self.sources = sources
+        self.dataflows = dataflows
+
+
+
+class Dataflow:
+    
+    def __init__(self, source, script, dest = None, frozen = False) -> None:
+        self.source = source
+        self.script = script
+        self.dest = dest
+        self.frozen = frozen
+
+
+    def getPrePandas(self):
+        pass
+
+
+    def getPostPandas(self):
+        pass
+
+
+    def execute(self):
+        pass
+
+
+
+class LinkedDataset:
+    
+    def __init__(self, linkedService, linkedItem) -> None:
+        self.linkedService = linkedService
+        self.linkedItem = linkedItem
+        self.metadata: dict = linkedService.getMetadata(linkedItem)
+
+
+    def getPandas(self) -> pd.DataFrame:
+        self.linkedService.getPandas(self.metadata)
+
+
+
+class FlowDataset:
+
+    def __init__(self, dataflow: Dataflow, **metadata) -> None:
+        self.dataflow = dataflow
+        self.metadata = metadata
+
+
+    def getPandas(self) -> pd.DataFrame:
+        self.dataflow.execute()
+
+
+
+class PandasDataset(LinkedDataset, FlowDataset):
+
+    def __init__(self, linkedService = None, linkedItem = None, dataflow = None) -> None:
+        super().__init__(linkedService, linkedItem)
+
