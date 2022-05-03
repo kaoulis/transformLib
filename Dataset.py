@@ -207,8 +207,4 @@ class FlowDataset:
 
 
 
-class PandasDataset(LinkedDataset, FlowDataset):
-
-    def __init__(self, linkedService = None, linkedItem = None, dataflow = None) -> None:
-        super().__init__(linkedService, linkedItem)
 
